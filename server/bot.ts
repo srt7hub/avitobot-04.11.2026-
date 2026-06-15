@@ -14,6 +14,7 @@ import {
 } from './services/memoryService.js'
 import { getFaqForProperty } from './services/faqService.js'
 import { findBookingForChat } from './services/bookingService.js'
+import { isBookingSyncConfigured, syncBookingsForTenant, sendPaymentConfirmation } from './services/avitoBookingService.js'
 import { isAiSilentPhase } from './utils/guestPhase.js'
 import { sendHumanTakeoverAlert, sendDialogueNotification, sendUnknownAnswerAlert, sendOpsAlert, sendPausedMessageNotification } from './services/telegramService.js'
 import { maskPii } from './services/piiService.js'
@@ -568,6 +569,68 @@ async function pollAllTenants(): Promise<void> {
   }
 }
 
+// Собирает TenantAvitoConfig (для messenger-вызовов) из prisma-конфига тенанта.
+function toAvitoConfig(config: PrismaTenantAvitoConfig): TenantAvitoConfig {
+  return {
+    id: config.id,
+    tenantId: config.tenantId,
+    avitoClientId: config.avitoClientId,
+    avitoClientSecret: config.avitoClientSecret,
+    avitoUserId: config.avitoUserId,
+    accessToken: config.accessToken,
+    refreshToken: config.refreshToken,
+    tokenExpiresAt: config.tokenExpiresAt,
+    pollingEnabled: config.pollingEnabled,
+    pollingStartedAt: config.pollingStartedAt,
+  }
+}
+
+// ─── Avito STR Booking sync ──────────────────────────────────────────────────
+// Отдельный, более редкий цикл: realty API тяжелее и rate-limited, чем messenger.
+// Тянет брони, ловит переход оплаты (prepaidAmount 0 → >0) и шлёт подтверждение.
+const BOOKING_SYNC_INTERVAL_MS = Number(process.env.BOOKING_SYNC_INTERVAL_MS) || 5 * 60_000
+let bookingSyncTimer: NodeJS.Timeout | null = null
+
+async function runBookingSync(): Promise<void> {
+  try {
+    const configs = await prisma.tenantAvitoConfig.findMany({
+      where: { pollingEnabled: true, tenant: { status: 'ACTIVE' } },
+      include: { tenant: true },
+    })
+    if (configs.length === 0) return
+
+    for (const config of configs) {
+      try {
+        const { synced, errors, newlyPaid } = await syncBookingsForTenant(config.tenantId)
+        if (synced || errors || newlyPaid.length) {
+          console.log(`[bookingSync][${config.tenantId}] synced=${synced} errors=${errors} newlyPaid=${newlyPaid.length}`)
+        }
+        const avitoConfig = toAvitoConfig(config)
+        for (const booking of newlyPaid) {
+          await sendPaymentConfirmation({ ...avitoConfig, tenant: config.tenant }, booking).catch(err =>
+            console.error(`[bookingSync][${config.tenantId}] sendPaymentConfirmation failed:`, err),
+          )
+        }
+      } catch (err) {
+        console.error(`[bookingSync][${config.tenantId}] sync error:`, err)
+      }
+    }
+  } catch (err) {
+    console.error('[bookingSync] runBookingSync error:', err)
+  }
+}
+
+async function bookingSyncLoop(): Promise<void> {
+  if (stopped) return
+  try {
+    await runBookingSync()
+  } catch (err) {
+    console.error('[bookingSync] loop error:', err)
+  } finally {
+    if (!stopped) bookingSyncTimer = setTimeout(bookingSyncLoop, BOOKING_SYNC_INTERVAL_MS)
+  }
+}
+
 const POLL_INTERVAL_MS = 30_000
 let isPolling = false
 let stopped = false
@@ -630,6 +693,7 @@ async function shutdown(signal: string): Promise<void> {
   console.log(`[bot] ${signal} received, shutting down gracefully...`)
   stopped = true
   if (pollTimer) clearTimeout(pollTimer)
+  if (bookingSyncTimer) clearTimeout(bookingSyncTimer)
   await prisma.$disconnect().catch(() => {})
   process.exit(0)
 }
@@ -643,6 +707,13 @@ async function main(): Promise<void> {
   startHealthServer()
   console.log('[bot] AvitoBot started, polling every 30s')
   pollLoop()
+
+  if (isBookingSyncConfigured()) {
+    console.log(`[bookingSync] enabled, syncing every ${Math.round(BOOKING_SYNC_INTERVAL_MS / 1000)}s`)
+    bookingSyncLoop()
+  } else {
+    console.log('[bookingSync] не настроен (AVITO_BOOKING_CLIENT_ID/SECRET/AVITO_USER_ID) — пропуск')
+  }
 }
 
 main().catch((err) => {

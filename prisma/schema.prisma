@@ -137,6 +137,10 @@ model Booking {
   // Выставляется синхронизацией; используется фазами как явный флаг оплаты.
   accessUnlocked Boolean  @default(false)
 
+  // paymentMsgSent — сообщение «оплата получена» гостю уже отправлено.
+  // Гарантирует ровно одну отправку при переходе prepaidAmount 0 → >0.
+  paymentMsgSent Boolean  @default(false)
+
   status         String   @default("ПОДТВЕРЖДЕНО")
   source         String   @default("Авито")
 
