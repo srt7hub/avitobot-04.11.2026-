@@ -1,5 +1,5 @@
 import { Router } from 'express'
-import rateLimit from 'express-rate-limit'
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit'
 import prisma from '../../prisma.js'
 import { buildSystemPrompt, generateReply } from '../../services/aiService.js'
 import { getFaqForProperty } from '../../services/faqService.js'
@@ -27,7 +27,9 @@ const playgroundLimiter = rateLimit({
   max: 20,
   standardHeaders: true,
   legacyHeaders: false,
-  keyGenerator: (req) => req.auth?.userId ?? req.ip ?? 'anon',
+  // Авторизованный эндпоинт: обычно ключ — userId. Фолбэк на IP нормализуем
+  // через ipKeyGenerator, иначе IPv6-клиенты могут обходить лимит (ERR_ERL_KEY_GEN_IPV6).
+  keyGenerator: (req) => req.auth?.userId ?? (req.ip ? ipKeyGenerator(req.ip) : 'anon'),
   message: { error: 'Слишком много запросов к тесту бота, подождите немного' },
 })
 
