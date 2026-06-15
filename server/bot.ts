@@ -601,11 +601,11 @@ async function runBookingSync(): Promise<void> {
 
     for (const config of configs) {
       try {
-        const { synced, errors, newlyPaid } = await syncBookingsForTenant(config.tenantId)
+        const avitoConfig = toAvitoConfig(config)
+        const { synced, errors, newlyPaid } = await syncBookingsForTenant(avitoConfig)
         if (synced || errors || newlyPaid.length) {
           console.log(`[bookingSync][${config.tenantId}] synced=${synced} errors=${errors} newlyPaid=${newlyPaid.length}`)
         }
-        const avitoConfig = toAvitoConfig(config)
         for (const booking of newlyPaid) {
           await sendPaymentConfirmation({ ...avitoConfig, tenant: config.tenant }, booking).catch(err =>
             console.error(`[bookingSync][${config.tenantId}] sendPaymentConfirmation failed:`, err),

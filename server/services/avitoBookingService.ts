@@ -8,7 +8,7 @@
 // SECRET + AVITO_USER_ID. Перенос в TenantAvitoConfig (per-tenant) — отдельный шаг.
 
 import prisma from '../prisma.js'
-import { sendMessage, markAsRead, type TenantAvitoConfig } from './avitoService.js'
+import { sendMessage, markAsRead, getAllChats, type AvitoChat, type TenantAvitoConfig } from './avitoService.js'
 import { getOrCreateDialogue, markMessageProcessed } from './memoryService.js'
 import { sendDialogueNotification, sendOpsAlert } from './telegramService.js'
 import type { Tenant } from '@prisma/client'
@@ -114,9 +114,25 @@ export interface SyncResult {
   newlyPaid: NewlyPaidBooking[]
 }
 
-// Тянет брони объектов тенанта из STR API и upsert-ит в Booking. Возвращает
-// брони, впервые получившие предоплату, — для них вызывающий шлёт PAYMENT_CONFIRM_MSG.
-export async function syncBookingsForTenant(tenantId: string): Promise<SyncResult> {
+// Находит свободный (не привязанный к другой брони) чат по item_id и имя гостя.
+// booking API не отдаёт chatId и реальное имя — берём их из мессенджера.
+function findChatForItem(
+  chats: AvitoChat[],
+  itemId: string,
+  userId: string,
+  takenChatIds: Set<string>
+): { chatId: string; guestName: string } | null {
+  const candidate = chats.find(c => String(c.item_id) === String(itemId) && !takenChatIds.has(c.id))
+  if (!candidate) return null
+  const guest = (candidate.users || []).find(u => String(u.id) !== String(userId))
+  return { chatId: candidate.id, guestName: (guest?.name || '').trim() }
+}
+
+// Тянет брони объектов тенанта из STR API и upsert-ит в Booking. Привязывает
+// бронь к Авито-чату по item_id (booking API chatId не отдаёт). Возвращает брони,
+// впервые получившие предоплату, — для них вызывающий шлёт PAYMENT_CONFIRM_MSG.
+export async function syncBookingsForTenant(config: TenantAvitoConfig): Promise<SyncResult> {
+  const tenantId = config.tenantId
   const token = await getStrToken()
   const userId = process.env.AVITO_USER_ID!
 
@@ -128,6 +144,20 @@ export async function syncBookingsForTenant(tenantId: string): Promise<SyncResul
   const to = new Date(now.getTime() + 90 * 24 * 60 * 60 * 1000)
   const dateFrom = now.toISOString().slice(0, 10)
   const dateTo = to.toISOString().slice(0, 10)
+
+  // Чаты тенанта грузим лениво (один раз) — нужны для привязки брони к чату.
+  let chats: AvitoChat[] | null = null
+  const getChatsOnce = async (): Promise<AvitoChat[]> => {
+    if (chats === null) chats = await getAllChats(config).catch(() => [])
+    return chats
+  }
+  // Чаты, уже занятые другими бронями (в т.ч. в БД) — чтобы не линковать на чужой.
+  const takenChatIds = new Set<string>(
+    (await prisma.booking.findMany({
+      where: { tenantId, avitoChatId: { not: '' } },
+      select: { avitoChatId: true },
+    })).map(b => b.avitoChatId)
+  )
 
   let synced = 0
   let errors = 0
@@ -191,14 +221,29 @@ export async function syncBookingsForTenant(tenantId: string): Promise<SyncResul
               })
           synced++
 
+          // Привязка к чату по item_id (если ещё не привязана). Заодно подтягиваем
+          // реальное имя гостя из чата — booking API отдаёт «Авито гость».
+          let chatId = saved.avitoChatId
+          let guestName = saved.guestName
+          if (!chatId) {
+            const match = findChatForItem(await getChatsOnce(), itemId, userId, takenChatIds)
+            if (match) {
+              chatId = match.chatId
+              takenChatIds.add(chatId)
+              const nameFromChat = match.guestName && match.guestName !== 'Авито гость' ? match.guestName : saved.guestName
+              await prisma.booking.update({
+                where: { id: saved.id },
+                data: { avitoChatId: chatId, guestName: nameFromChat },
+              })
+              guestName = nameFromChat
+              console.log(`[bookingSync][${tenantId}] booking=${saved.id} привязана к чату ${chatId}`)
+            }
+          }
+
           // Переход 0 → >0 и сообщение ещё не отправляли → кандидат на оплату.
-          // Шлём только если бронь уже привязана к чату (иначе — следующий цикл).
-          if (!wasPaid && isPaidNow && !saved.paymentMsgSent && saved.avitoChatId) {
-            newlyPaid.push({
-              bookingId: saved.id,
-              avitoChatId: saved.avitoChatId,
-              guestName: saved.guestName,
-            })
+          // Шлём только если бронь привязана к чату (иначе — следующий цикл).
+          if (!wasPaid && isPaidNow && !saved.paymentMsgSent && chatId) {
+            newlyPaid.push({ bookingId: saved.id, avitoChatId: chatId, guestName })
           }
         }
       } catch (err) {
