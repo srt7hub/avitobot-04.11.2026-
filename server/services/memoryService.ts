@@ -74,6 +74,20 @@ export async function setBotDisabled(dialogueId: string, tenantId: string, disab
   })
 }
 
+/**
+ * Возвращает бота в чат: снимает и ручное отключение (botDisabled), и активную
+ * авто-паузу (pausedUntil). Оба состояния снимаются вместе намеренно — менеджер
+ * видит одно «бот молчит» и жмёт одну кнопку, не разбираясь, чем именно бот
+ * остановлен. Без сброса pausedUntil кнопка «Включить» выглядела бы сломанной:
+ * бот продолжал бы молчать до истечения 30 минут.
+ */
+export async function resumeDialogue(dialogueId: string, tenantId: string): Promise<void> {
+  await prisma.dialogue.update({
+    where: { id: dialogueId, tenantId },
+    data: { botDisabled: false, pausedUntil: null },
+  })
+}
+
 export async function pauseDialogue(avitoChatId: string, tenantId: string, minutes: number): Promise<void> {
   const pausedUntil = new Date(Date.now() + minutes * 60 * 1000)
   await prisma.dialogue.update({

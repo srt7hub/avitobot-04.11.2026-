@@ -4,6 +4,13 @@ import { setBotDisabled } from '../../services/memoryService.js'
 
 const router = Router()
 
+// Пауза активна, только если pausedUntil ещё в будущем. Поле не обнуляется при
+// истечении, поэтому проверка на !== null пометила бы диалог «человек ведёт»
+// навсегда после первой же авто-паузы.
+function isPauseActive(pausedUntil: Date | null): boolean {
+  return pausedUntil !== null && pausedUntil > new Date()
+}
+
 router.get('/dialogues', async (req, res) => {
   const tenantId = req.auth!.tenantId!
   const page = Math.max(1, parseInt(String(req.query.page ?? '1'), 10))
@@ -37,7 +44,7 @@ router.get('/dialogues', async (req, res) => {
         propertyName: d.property?.name ?? null,
         messageCount: d.messageCount,
         lastMessageAt: d.lastMessageAt,
-        isHumanTakeover: d.pausedUntil !== null,
+        isHumanTakeover: isPauseActive(d.pausedUntil),
         botDisabled: d.botDisabled,
         lastMessage: d.messages[0]
           ? { role: d.messages[0].role, content: d.messages[0].content }
@@ -78,7 +85,7 @@ router.get('/dialogues/:id', async (req, res) => {
       propertyName: d.property?.name ?? null,
       messageCount: d.messageCount,
       lastMessageAt: d.lastMessageAt,
-      isHumanTakeover: d.pausedUntil !== null,
+      isHumanTakeover: isPauseActive(d.pausedUntil),
       botDisabled: d.botDisabled,
       createdAt: d.createdAt,
       messages: d.messages.map((m: any) => ({
