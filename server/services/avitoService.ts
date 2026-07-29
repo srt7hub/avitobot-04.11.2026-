@@ -12,6 +12,10 @@ export interface AvitoTokenState {
 export interface AvitoChat {
   id: string
   item_id: string
+  // updated — время последней активности чата (unix, сек). Обновляется на ЛЮБОЕ
+  // событие, включая системные сообщения Авито (напр. «У вас новая бронь»),
+  // которые НЕ попадают в last_message. Используется для окна опроса в боте.
+  updated?: number
   users: Array<{ id: number; name: string }>
   last_message?: { created: number; content?: { text?: string } }
   context?: { value?: { id?: number | string } }

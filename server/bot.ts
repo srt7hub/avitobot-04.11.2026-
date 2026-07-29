@@ -8,6 +8,7 @@ import {
   getOrCreateDialogue,
   updateDialogue,
   markMessageProcessed,
+  isMessageProcessed,
   isPaused,
   pauseDialogue,
   getRecentMessages,
@@ -17,6 +18,7 @@ import { findBookingForChat } from './services/bookingService.js'
 import { isBookingSyncConfigured, syncBookingsForTenant, sendPaymentConfirmation } from './services/avitoBookingService.js'
 import { isAiSilentPhase } from './utils/guestPhase.js'
 import { sendHumanTakeoverAlert, sendDialogueNotification, sendUnknownAnswerAlert, sendOpsAlert, sendPausedMessageNotification } from './services/telegramService.js'
+import { pollTelegramCommands } from './services/telegramCommandService.js'
 import { maskPii } from './services/piiService.js'
 import { isPaymentStatusIntent, isSmsIntent, isAckIntent } from './constants/intents.js'
 import type { AvitoChat, AvitoMessage } from './services/avitoService.js'
@@ -52,6 +54,12 @@ const BOOKING_KEYWORDS = [
 // Не реагируем на system-сообщения старше этого возраста (защита от того,
 // что после рестарта бота старая "новая бронь" триггерит приветствие заново).
 const BOOKING_MAX_AGE_MS = 2 * 60 * 60 * 1000 // 2 часа
+
+// Окно «недавней активности» чата: getMessages вызываем только для чатов, у
+// которых chat.updated за это время. Защищает rate-limit Авито и покрывает кейс
+// «менеджер прочитал чат раньше бота». Окно с большим запасом перекрывает тик
+// поллинга (POLL_INTERVAL_MS) — на случай, если менеджер читает чат не сразу.
+const ACTIVE_CHAT_WINDOW_MS = 30 * 60 * 1000 // 30 минут
 
 function isSystemMessage(message: AvitoMessage): boolean {
   return message.type === 'system' || String(message.author_id) === '0'
@@ -110,7 +118,7 @@ async function sendProgrammaticReply(
   })
 
   if (tenant.telegramBotToken && tenant.telegramChatId) {
-    await sendDialogueNotification(tenant.telegramBotToken, tenant.telegramChatId, avitoChatId, guestName, guestMessage, reply)
+    await sendDialogueNotification(tenant.telegramBotToken, tenant.telegramChatId, avitoChatId, guestName, guestMessage, reply, dialogueId)
   }
 }
 
@@ -188,7 +196,7 @@ async function processMessage(
       // Уведомления в Telegram клиента + OPS
       const guestName = chat.users?.find(u => u.id !== Number(config.avitoUserId))?.name ?? 'Гость'
       if (tenant.telegramBotToken && tenant.telegramChatId) {
-        await sendDialogueNotification(tenant.telegramBotToken, tenant.telegramChatId, avitoChatId, guestName, '🆕 Новая бронь', greeting)
+        await sendDialogueNotification(tenant.telegramBotToken, tenant.telegramChatId, avitoChatId, guestName, '🆕 Новая бронь', greeting, dialogue.id)
       }
       await sendOpsAlert(`[${tenantId}] Новая бронь в чате ${avitoChatId} (гость: ${guestName})`)
     } else {
@@ -240,7 +248,7 @@ async function processMessage(
     // промежуточные из пачки (иначе они потеряются: ответа-то всё равно нет).
     if (tenant.telegramBotToken && tenant.telegramChatId && await isPaused(avitoChatId, tenantId)) {
       const pausedGuestName = chat.users?.find(u => u.id !== Number(config.avitoUserId))?.name ?? 'Гость'
-      await sendPausedMessageNotification(tenant.telegramBotToken, tenant.telegramChatId, avitoChatId, pausedGuestName, maskedText)
+      await sendPausedMessageNotification(tenant.telegramBotToken, tenant.telegramChatId, avitoChatId, pausedGuestName, maskedText, dialogue.id)
     }
     return
   }
@@ -271,7 +279,8 @@ async function processMessage(
         tenant.telegramBotToken,
         tenant.telegramChatId,
         avitoChatId,
-        guestName
+        guestName,
+        dialogue.id
       )
     }
 
@@ -290,7 +299,7 @@ async function processMessage(
     // Бот молчит, но менеджер должен видеть, что пишет гость — дублируем в Telegram.
     if (tenant.telegramBotToken && tenant.telegramChatId) {
       const pausedGuestName = chat.users?.find(u => u.id !== Number(config.avitoUserId))?.name ?? 'Гость'
-      await sendPausedMessageNotification(tenant.telegramBotToken, tenant.telegramChatId, avitoChatId, pausedGuestName, maskedText)
+      await sendPausedMessageNotification(tenant.telegramBotToken, tenant.telegramChatId, avitoChatId, pausedGuestName, maskedText, dialogue.id)
     }
     return
   }
@@ -329,7 +338,8 @@ async function processMessage(
     console.log(`[bot][${tenantId}] Phase ${phase} in chat ${avitoChatId} — AI молчит, эскалация оператору`)
     await markAsRead(avitoConfig, avitoChatId)
     if (tenant.telegramBotToken && tenant.telegramChatId) {
-      await sendUnknownAnswerAlert(tenant.telegramBotToken, tenant.telegramChatId, avitoChatId, guestName, maskedText, `— фаза ${phase}, нужен оператор —`)
+      // Тихая фаза паузу не ставит — бот формально активен, поэтому «Выключить».
+      await sendUnknownAnswerAlert(tenant.telegramBotToken, tenant.telegramChatId, avitoChatId, guestName, maskedText, `— фаза ${phase}, нужен оператор —`, dialogue.id, false)
     }
     return
   }
@@ -412,9 +422,10 @@ async function processMessage(
   // Telegram notifications
   if (tenant.telegramBotToken && tenant.telegramChatId) {
     if (isUnknown) {
-      await sendUnknownAnswerAlert(tenant.telegramBotToken, tenant.telegramChatId, avitoChatId, guestName, maskedText, filteredReply)
+      // isUnknown → выше уже поставлена авто-пауза на 30 мин, бот молчит.
+      await sendUnknownAnswerAlert(tenant.telegramBotToken, tenant.telegramChatId, avitoChatId, guestName, maskedText, filteredReply, dialogue.id, true)
     } else {
-      await sendDialogueNotification(tenant.telegramBotToken, tenant.telegramChatId, avitoChatId, guestName, maskedText, filteredReply)
+      await sendDialogueNotification(tenant.telegramBotToken, tenant.telegramChatId, avitoChatId, guestName, maskedText, filteredReply, dialogue.id)
     }
   }
 
@@ -471,14 +482,40 @@ async function processTenant(config: PrismaTenantAvitoConfig & { tenant: Tenant 
   }
 
   try {
-    // unread_only=true: тянем только чаты с непрочитанными сообщениями — getMessages
-    // вызываем лишь для них, а не для всех чатов тенанта (экономия rate-limit Авито).
-    const chats = await getAllChats(avitoConfig, true)
+    // Тянем ВСЕ чаты (не только unread_only): чат, который менеджер открыл и
+    // прочитал в Авито, выпадает из unread-списка — но в нём могут быть сообщения,
+    // которые бот ещё не обработал (менеджер прочитал их раньше бота). Чтобы не
+    // дёргать getMessages по всем чатам каждый тик (rate-limit Авито), опрашиваем
+    // только недавно активные — по полю chat.updated в окне ACTIVE_CHAT_WINDOW_MS.
+    // ВАЖНО: фильтруем по `updated`, а НЕ по last_message.created. Системные
+    // сообщения Авито (в т.ч. «У вас новая бронь») НЕ становятся last_message в
+    // списке чатов, но обновляют `updated`. Фильтр по last_message их пропускал —
+    // бот не видел новые брони, если менеджер успевал прочитать чат. См. дедуп ниже.
+    const chats = await getAllChats(avitoConfig, false)
+    const activeSince = Date.now() - ACTIVE_CHAT_WINDOW_MS
+    const activeChats = chats.filter(
+      c => Math.max(c.updated ?? 0, c.last_message?.created ?? 0) * 1000 >= activeSince
+    )
 
-    for (const chat of chats) {
+    for (const chat of activeChats) {
       try {
         const messages = await getMessages(avitoConfig, chat.id)
-        const unread = messages.filter(m => !m.isRead && m.author_id !== Number(config.avitoUserId))
+
+        // «Новые» сообщения определяем по СВОЕЙ истории (таблица Message), а не по
+        // isRead от Авито. Причина: менеджер, открыв диалог в Авито, помечает
+        // сообщения прочитанными РАНЬШЕ, чем бот доходит до них в своём тике —
+        // тогда фильтр по isRead навсегда их пропускает, и бот молчит. Опираемся
+        // на avitoMsgId: сообщение «новое», пока оно не записано в Message.
+        // Дедуп при записи (markMessageProcessed) остаётся вторым замком от гонок.
+        // Авито отдаёт сообщения от новых к старым — разворачиваем в хронологию,
+        // чтобы isLast ниже означал действительно ПОСЛЕДНее по времени сообщение.
+        const candidates = messages
+          .filter(m => m.author_id !== Number(config.avitoUserId))
+          .sort((a, b) => (a.created ?? 0) - (b.created ?? 0))
+        const newFlags = await Promise.all(
+          candidates.map(m => isMessageProcessed(String(m.id)).then(done => !done))
+        )
+        const unread = candidates.filter((_, idx) => newFlags[idx])
 
         // Схлопываем пачку: если гость прислал несколько сообщений подряд (бот
         // увидел их за один тик), отвечаем ОДИН раз — на последнее, с учётом
@@ -631,6 +668,23 @@ async function bookingSyncLoop(): Promise<void> {
   }
 }
 
+// ─── Telegram-команды (нажатия inline-кнопок) ────────────────────────────────
+// Отдельный быстрый цикл: реакция на кнопку должна быть почти мгновенной, тогда
+// как поллинг Авито идёт раз в 30с. Опрос лёгкий — getUpdates без блокировки.
+const TG_COMMAND_INTERVAL_MS = Number(process.env.TG_COMMAND_INTERVAL_MS) || 3_000
+let tgCommandTimer: NodeJS.Timeout | null = null
+
+async function telegramCommandLoop(): Promise<void> {
+  if (stopped) return
+  try {
+    await pollTelegramCommands()
+  } catch (err) {
+    console.error('[tgCmd] loop error:', err)
+  } finally {
+    if (!stopped) tgCommandTimer = setTimeout(telegramCommandLoop, TG_COMMAND_INTERVAL_MS)
+  }
+}
+
 const POLL_INTERVAL_MS = 30_000
 let isPolling = false
 let stopped = false
@@ -694,6 +748,7 @@ async function shutdown(signal: string): Promise<void> {
   stopped = true
   if (pollTimer) clearTimeout(pollTimer)
   if (bookingSyncTimer) clearTimeout(bookingSyncTimer)
+  if (tgCommandTimer) clearTimeout(tgCommandTimer)
   await prisma.$disconnect().catch(() => {})
   process.exit(0)
 }
@@ -707,6 +762,9 @@ async function main(): Promise<void> {
   startHealthServer()
   console.log('[bot] AvitoBot started, polling every 30s')
   pollLoop()
+
+  console.log(`[tgCmd] Telegram-кнопки активны, опрос каждые ${Math.round(TG_COMMAND_INTERVAL_MS / 1000)}s`)
+  telegramCommandLoop()
 
   if (isBookingSyncConfigured()) {
     console.log(`[bookingSync] enabled, syncing every ${Math.round(BOOKING_SYNC_INTERVAL_MS / 1000)}s`)
