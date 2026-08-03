@@ -24,6 +24,35 @@ test('parseIcal: читает all-day VEVENT с DATE', () => {
   assert.equal(formatIcalDate(events[0].end), '20260820')
 })
 
+// Реальный ответ public.extranet.travel.yandex.net (сверено с живым фидом 03.08.2026):
+// порядок полей отличается от нашего, есть DESCRIPTION/CREATED/LAST-MODIFIED,
+// которые мы игнорируем. Регрессия на случай доработок парсера.
+test('parseIcal: реальный фид Яндекс Путешествий', () => {
+  const feed = [
+    'BEGIN:VCALENDAR',
+    'PRODID:-//Yandex LLC//NONSGML Travel.Yandex//EN',
+    'CALSCALE:GREGORIAN',
+    'VERSION:2.0',
+    'BEGIN:VEVENT',
+    'UID:5f71a544-9aad-4b23-82a8-ebef9c4ff6f2@yandex.com',
+    'DTSTART;VALUE=DATE:20260808',
+    'DTEND;VALUE=DATE:20260809',
+    'SUMMARY:Бронирование на Яндекс Путешествиях',
+    'DESCRIPTION:Категория номера: 498662',
+    'CREATED:20260712T192348Z',
+    'LAST-MODIFIED:20260712T192348Z',
+    'END:VEVENT',
+    'END:VCALENDAR',
+  ].join('\r\n')
+
+  const events = parseIcal(feed)
+  assert.equal(events.length, 1)
+  assert.equal(events[0].uid, '5f71a544-9aad-4b23-82a8-ebef9c4ff6f2@yandex.com')
+  assert.equal(events[0].summary, 'Бронирование на Яндекс Путешествиях')
+  assert.equal(formatIcalDate(events[0].start), '20260808')
+  assert.equal(formatIcalDate(events[0].end), '20260809')
+})
+
 test('parseIcal: читает DATE-TIME с Z', () => {
   const feed = [
     'BEGIN:VCALENDAR',
