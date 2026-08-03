@@ -28,6 +28,9 @@ model Tenant {
   unhandled   UnhandledQuestion[]
   botSessions BotSession[]
   bookings    Booking[]
+  calendarSyncs  CalendarSync[]
+  calendarBlocks CalendarBlock[]
+  calendarFeeds  CalendarFeed[]
 }
 
 enum TenantStatus {
@@ -111,6 +114,8 @@ model Property {
   faqEntries  FaqEntry[]
   dialogues   Dialogue[]
   bookings    Booking[]
+  calendarSyncs CalendarSync[]
+  calendarFeed  CalendarFeed?
 
   @@index([tenantId])
   @@index([tenantId, avitoItemId])
@@ -156,6 +161,90 @@ model Booking {
   @@unique([tenantId, avitoBookingId])
   @@index([tenantId, avitoChatId])
   @@index([propertyId])
+}
+
+// ─── CalendarSync ─────────────────────────────────────────────────────────────
+// Подключённый iCal-канал объекта: одна строка = один внешний календарь
+// (Яндекс Путешествия, Авито, Циан…). Синхронизация занятости идёт только
+// через iCal: цены протокол не передаёт, поэтому цены остаются ручными.
+//
+// Направления:
+//   importUrl — .ics чужой площадки, откуда мы тянем чужие брони (pull);
+//   экспорт — наш собственный .ics, отдаётся по CalendarFeed.token и
+//   вставляется в экстранет площадки, чтобы она забирала наши даты (push).
+
+model CalendarSync {
+  id         String   @id @default(cuid())
+  tenantId   String
+  propertyId String
+
+  // Площадка: ЯНДЕКС | АВИТО | ЦИАН | ДРУГОЕ. Строкой, а не enum — площадки
+  // добавляются без миграции, ровно как source у Booking.
+  platform   String   @default("ЯНДЕКС")
+  importUrl  String   @default("")
+  isActive   Boolean  @default(true)
+
+  // Телеметрия последнего pull — показывается на вкладке «Календарь»,
+  // чтобы клиент видел живой канал, а не молчаливо протухший.
+  lastSyncAt      DateTime?
+  lastSyncStatus  String    @default("")   // ОК | ОШИБКА | пусто (ещё не синкали)
+  lastSyncError   String    @default("")
+  lastEventCount  Int       @default(0)
+
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  property   Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  blocks     CalendarBlock[]
+
+  @@unique([propertyId, platform])
+  @@index([tenantId])
+}
+
+// ─── CalendarBlock ────────────────────────────────────────────────────────────
+// Занятый интервал, пришедший из внешнего iCal (не наша бронь из Avito API —
+// та живёт в Booking). Полностью пересоздаётся при каждом успешном pull:
+// исчез VEVENT на той стороне → исчезла блокировка здесь → даты открылись.
+// Это и даёт «отмена брони открывает даты обратно» без отдельной логики.
+
+model CalendarBlock {
+  id        String   @id @default(cuid())
+  tenantId  String
+  syncId    String
+
+  uid       String   @default("")   // UID из VEVENT — для дедупликации внутри фида
+  summary   String   @default("")
+  start     DateTime                // включительно (день заезда)
+  end       DateTime                // ИСКЛЮЧИТЕЛЬНО (день выезда свободен) — семантика DTEND в iCal
+
+  createdAt DateTime @default(now())
+
+  tenant    Tenant       @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  sync      CalendarSync @relation(fields: [syncId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+  @@index([syncId])
+  @@index([tenantId, start, end])
+}
+
+// ─── CalendarFeed ─────────────────────────────────────────────────────────────
+// Наш исходящий .ics для объекта. Токен — секрет в URL: фид отдаётся без
+// авторизации (площадка не умеет присылать заголовки), поэтому токен должен
+// быть длинным случайным и меняться при компрометации (rotate).
+
+model CalendarFeed {
+  id         String   @id @default(cuid())
+  tenantId   String
+  propertyId String   @unique
+  token      String   @unique
+
+  createdAt  DateTime @default(now())
+
+  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  property   Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
 }
 
 // ─── FaqEntry ─────────────────────────────────────────────────────────────────

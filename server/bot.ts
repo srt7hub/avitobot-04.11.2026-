@@ -16,6 +16,7 @@ import {
 import { getFaqForProperty } from './services/faqService.js'
 import { findBookingForChat } from './services/bookingService.js'
 import { isBookingSyncConfigured, syncBookingsForTenant, sendPaymentConfirmation } from './services/avitoBookingService.js'
+import { syncTenantCalendars } from './services/calendarService.js'
 import { isAiSilentPhase } from './utils/guestPhase.js'
 import { sendHumanTakeoverAlert, sendDialogueNotification, sendUnknownAnswerAlert, sendOpsAlert, sendPausedMessageNotification } from './services/telegramService.js'
 import { pollTelegramCommands } from './services/telegramCommandService.js'
@@ -668,6 +669,51 @@ async function bookingSyncLoop(): Promise<void> {
   }
 }
 
+// ─── iCal-синхронизация календарей ───────────────────────────────────────────
+// Тянет занятость с других площадок (Яндекс Путешествия и т.п.) и складывает
+// в CalendarBlock. Наши брони уезжают обратно через экспортный .ics, который
+// площадки забирают сами. Интервал 30 минут: площадки всё равно обновляют
+// свои календари не чаще раза в час, чаще дёргать смысла нет.
+const CALENDAR_SYNC_INTERVAL_MS = Number(process.env.CALENDAR_SYNC_INTERVAL_MS) || 30 * 60_000
+let calendarSyncTimer: NodeJS.Timeout | null = null
+
+async function runCalendarSync(): Promise<void> {
+  try {
+    const tenants = await prisma.tenant.findMany({
+      where: { status: 'ACTIVE', calendarSyncs: { some: { isActive: true, importUrl: { not: '' } } } },
+      select: { id: true },
+    })
+
+    for (const { id } of tenants) {
+      try {
+        const results = await syncTenantCalendars(id)
+        const failed = results.filter(r => !r.ok)
+        if (results.length) {
+          console.log(`[calendarSync][${id}] feeds=${results.length} failed=${failed.length}`)
+        }
+        for (const f of failed) {
+          console.error(`[calendarSync][${id}] ${f.platform}: ${f.error}`)
+        }
+      } catch (err) {
+        console.error(`[calendarSync][${id}] sync error:`, err)
+      }
+    }
+  } catch (err) {
+    console.error('[calendarSync] runCalendarSync error:', err)
+  }
+}
+
+async function calendarSyncLoop(): Promise<void> {
+  if (stopped) return
+  try {
+    await runCalendarSync()
+  } catch (err) {
+    console.error('[calendarSync] loop error:', err)
+  } finally {
+    if (!stopped) calendarSyncTimer = setTimeout(calendarSyncLoop, CALENDAR_SYNC_INTERVAL_MS)
+  }
+}
+
 // ─── Telegram-команды (нажатия inline-кнопок) ────────────────────────────────
 // Отдельный быстрый цикл: реакция на кнопку должна быть почти мгновенной, тогда
 // как поллинг Авито идёт раз в 30с. Опрос лёгкий — getUpdates без блокировки.
@@ -748,6 +794,7 @@ async function shutdown(signal: string): Promise<void> {
   stopped = true
   if (pollTimer) clearTimeout(pollTimer)
   if (bookingSyncTimer) clearTimeout(bookingSyncTimer)
+  if (calendarSyncTimer) clearTimeout(calendarSyncTimer)
   if (tgCommandTimer) clearTimeout(tgCommandTimer)
   await prisma.$disconnect().catch(() => {})
   process.exit(0)
@@ -772,6 +819,9 @@ async function main(): Promise<void> {
   } else {
     console.log('[bookingSync] не настроен (AVITO_BOOKING_CLIENT_ID/SECRET/AVITO_USER_ID) — пропуск')
   }
+
+  console.log(`[calendarSync] iCal-синхронизация каждые ${Math.round(CALENDAR_SYNC_INTERVAL_MS / 60_000)} мин`)
+  calendarSyncLoop()
 }
 
 main().catch((err) => {

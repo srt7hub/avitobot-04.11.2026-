@@ -11,6 +11,8 @@ import propertiesRoutes from './routes/client/properties.js'
 import settingsRoutes from './routes/client/settings.js'
 import dialoguesRoutes from './routes/client/dialogues.js'
 import playgroundRoutes from './routes/client/playground.js'
+import calendarRoutes from './routes/client/calendar.js'
+import { buildPropertyFeed } from './services/calendarService.js'
 import clientsRoutes from './routes/ops/clients.js'
 import avitoRoutes from './routes/ops/avito.js'
 import contentRoutes from './routes/ops/content.js'
@@ -114,12 +116,39 @@ app.get('/api/client/settings/avito-oauth/callback', async (req, res) => {
   }
 })
 
+// Публичный iCal-фид: площадки (Яндекс, Авито, Циан) забирают .ics по cron и
+// не умеют слать Authorization — доступ авторизуется секретным токеном в URL.
+app.get('/api/calendar/feed/:token.ics', async (req, res) => {
+  const token = (req.params as Record<string, string>).token
+
+  try {
+    const feed = await prisma.calendarFeed.findUnique({ where: { token } })
+    if (!feed) {
+      res.status(404).type('text/plain').send('Not found')
+      return
+    }
+
+    // Площадке не отдаём её же брони: иначе она увидит их как чужую занятость.
+    const platform = typeof req.query.for === 'string' ? req.query.for.toUpperCase() : undefined
+    const ics = await buildPropertyFeed(feed.propertyId, platform)
+
+    res.setHeader('Content-Type', 'text/calendar; charset=utf-8')
+    res.setHeader('Content-Disposition', 'attachment; filename="calendar.ics"')
+    res.setHeader('Cache-Control', 'no-cache')
+    res.send(ics)
+  } catch (err) {
+    console.error('[calendar feed] error:', err)
+    res.status(500).type('text/plain').send('Internal error')
+  }
+})
+
 app.use('/api/client', authMiddleware, clientOnly, dashboardRoutes)
 app.use('/api/client', authMiddleware, clientOnly, faqRoutes)
 app.use('/api/client', authMiddleware, clientOnly, propertiesRoutes)
 app.use('/api/client', authMiddleware, clientOnly, settingsRoutes)
 app.use('/api/client', authMiddleware, clientOnly, dialoguesRoutes)
 app.use('/api/client', authMiddleware, clientOnly, playgroundRoutes)
+app.use('/api/client', authMiddleware, clientOnly, calendarRoutes)
 
 app.use('/api/ops', authMiddleware, opsOnly, clientsRoutes)
 app.use('/api/ops', authMiddleware, opsOnly, avitoRoutes)

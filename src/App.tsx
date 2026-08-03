@@ -3,6 +3,7 @@ import { isAuthenticated, getRole, logout } from './auth'
 
 import Login from './client-panel/Login'
 import Dashboard from './client-panel/Dashboard'
+import Calendar from './client-panel/Calendar'
 import FaqManager from './client-panel/FaqManager'
 import Properties from './client-panel/Properties'
 import SettingsPage from './client-panel/Settings'
@@ -16,9 +17,9 @@ import ClientDetail from './ops-panel/ClientDetail'
 
 // ─── Client Panel routing ─────────────────────────────────────────────────────
 
-type ClientPage = 'dashboard' | 'faq' | 'properties' | 'settings' | 'dialogues' | 'playground'
+type ClientPage = 'dashboard' | 'calendar' | 'faq' | 'properties' | 'settings' | 'dialogues' | 'playground'
 
-const CLIENT_PAGES: ClientPage[] = ['dashboard', 'faq', 'properties', 'settings', 'dialogues', 'playground']
+const CLIENT_PAGES: ClientPage[] = ['dashboard', 'calendar', 'faq', 'properties', 'settings', 'dialogues', 'playground']
 
 function getClientPage(): ClientPage {
   const hash = window.location.hash.replace('#/', '').replace('#', '')
@@ -27,6 +28,7 @@ function getClientPage(): ClientPage {
 
 const CLIENT_NAV: { id: ClientPage; label: string }[] = [
   { id: 'dashboard', label: 'Дашборд' },
+  { id: 'calendar', label: 'Календарь' },
   { id: 'faq', label: 'База знаний' },
   { id: 'properties', label: 'Объявления' },
   { id: 'dialogues', label: 'Диалоги' },
@@ -84,8 +86,9 @@ function ClientApp() {
 
       {/* Content */}
       <main className="flex-1 min-w-0 overflow-y-auto">
-        <div className="max-w-2xl mx-auto px-6 py-6">
+        <div className={`${page === 'calendar' ? 'max-w-6xl' : 'max-w-2xl'} mx-auto px-6 py-6`}>
           {page === 'dashboard' && <Dashboard onNavigate={navigate} />}
+          {page === 'calendar' && <Calendar />}
           {page === 'faq' && <FaqManager />}
           {page === 'properties' && <Properties />}
           {page === 'dialogues' && <Dialogues />}

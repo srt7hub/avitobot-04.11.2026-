@@ -422,3 +422,75 @@ export function setDialogueBot(id: string, disabled: boolean) {
     body: JSON.stringify({ disabled }),
   })
 }
+
+// Calendar
+
+export interface CalendarInterval {
+  id: string
+  kind: 'booking' | 'block'
+  platform: string
+  guestName: string
+  start: string
+  end: string
+  totalPrice: number
+  isPaid: boolean
+}
+
+export interface CalendarSyncInfo {
+  id: string
+  platform: string
+  importUrl: string
+  isActive: boolean
+  lastSyncAt: string | null
+  lastSyncStatus: string
+  lastSyncError: string
+  lastEventCount: number
+}
+
+export interface CalendarProperty {
+  propertyId: string
+  name: string
+  address: string
+  avitoItemId: string
+  hasFeed: boolean
+  syncs: CalendarSyncInfo[]
+  intervals: CalendarInterval[]
+}
+
+export interface CalendarData {
+  from: string
+  to: string
+  properties: CalendarProperty[]
+}
+
+export function fetchCalendar(from?: string, to?: string) {
+  const qs = new URLSearchParams()
+  if (from) qs.set('from', from)
+  if (to) qs.set('to', to)
+  const suffix = qs.toString() ? `?${qs}` : ''
+  return request<CalendarData>(`/client/calendar${suffix}`)
+}
+
+export function addCalendarSync(propertyId: string, platform: string, importUrl: string) {
+  return request<{ sync: { id: string; platform: string }; result: unknown }>('/client/calendar/syncs', {
+    method: 'POST',
+    body: JSON.stringify({ propertyId, platform, importUrl }),
+  })
+}
+
+export function deleteCalendarSync(id: string) {
+  return request<{ ok: boolean }>(`/client/calendar/syncs/${id}`, { method: 'DELETE' })
+}
+
+export function syncCalendars() {
+  return request<{ ok: boolean; synced: number; failed: number }>('/client/calendar/sync', {
+    method: 'POST',
+  })
+}
+
+export function createCalendarFeed(propertyId: string, rotate = false) {
+  return request<{ token: string; url: string }>('/client/calendar/feed', {
+    method: 'POST',
+    body: JSON.stringify({ propertyId, rotate }),
+  })
+}
