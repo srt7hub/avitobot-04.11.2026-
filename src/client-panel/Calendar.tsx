@@ -52,6 +52,14 @@ function fmtDate(iso: string): string {
   return `${String(d.getUTCDate()).padStart(2, '0')}.${String(d.getUTCMonth() + 1).padStart(2, '0')}`
 }
 
+function plural(n: number, one: string, few: string, many: string): string {
+  const mod10 = n % 10
+  const mod100 = n % 100
+  if (mod10 === 1 && mod100 !== 11) return one
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return few
+  return many
+}
+
 function fmtSyncTime(iso: string | null): string {
   if (!iso) return 'ещё не синхронизировался'
   const d = new Date(iso)
@@ -61,6 +69,37 @@ function fmtSyncTime(iso: string | null): string {
   const hours = Math.round(mins / 60)
   if (hours < 24) return `${hours} ч назад`
   return `${Math.round(hours / 24)} дн назад`
+}
+
+/**
+ * Копирование с фолбэком: navigator.clipboard существует только в secure context
+ * (https или localhost). Панель открывают и по http на IP — там обращение к
+ * .writeText падает, поэтому пробуем execCommand и в крайнем случае молча сдаёмся:
+ * ссылка всё равно видна в поле и её можно выделить руками.
+ */
+async function copyToClipboard(text: string): Promise<boolean> {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text)
+      return true
+    }
+  } catch {
+    // ниже — запасной путь
+  }
+
+  try {
+    const ta = document.createElement('textarea')
+    ta.value = text
+    ta.style.position = 'fixed'
+    ta.style.opacity = '0'
+    document.body.appendChild(ta)
+    ta.select()
+    const ok = document.execCommand('copy')
+    document.body.removeChild(ta)
+    return ok
+  } catch {
+    return false
+  }
 }
 
 export default function Calendar() {
@@ -310,10 +349,10 @@ function SyncSettings({ property, onChanged }: { property: CalendarProperty; onC
       if (res) {
         const absolute = res.url.startsWith('http') ? res.url : `${window.location.origin}${res.url}`
         setFeedUrl(absolute)
-        await navigator.clipboard.writeText(absolute).then(
-          () => { setCopied(true); setTimeout(() => setCopied(false), 2000) },
-          () => {}
-        )
+        if (await copyToClipboard(absolute)) {
+          setCopied(true)
+          setTimeout(() => setCopied(false), 2000)
+        }
         onChanged()
       }
     } catch (e) {
@@ -346,6 +385,14 @@ function SyncSettings({ property, onChanged }: { property: CalendarProperty; onC
         <p className="text-[11px] text-gray-400 mt-1">
           Вставьте её в Яндекс Путешествия → Экстранет → Синхронизация календарей.
         </p>
+        {/* Ссылку собирает сервер из APP_URL. Если он указывает на другой хост,
+            площадка получит недоступный адрес — предупреждаем до похода в экстранет. */}
+        {feedUrl && !feedUrl.startsWith(window.location.origin) && (
+          <p className="text-[11px] text-amber-600 mt-1">
+            Ссылка ведёт на другой адрес, чем открыта панель. Если площадка пишет «календарь
+            недоступен» — проверьте, что домен из ссылки указывает на этот сервер.
+          </p>
+        )}
       </div>
 
       {/* Подключённые чужие календари */}
@@ -358,7 +405,11 @@ function SyncSettings({ property, onChanged }: { property: CalendarProperty; onC
                 <p className="text-xs font-medium text-gray-800">
                   {s.platform}
                   {s.lastSyncStatus === 'ОШИБКА' && <span className="ml-1.5 text-red-500">ошибка</span>}
-                  {s.lastSyncStatus === 'ОК' && <span className="ml-1.5 text-emerald-600">{s.lastEventCount} броней</span>}
+                  {s.lastSyncStatus === 'ОК' && (
+                    <span className="ml-1.5 text-emerald-600">
+                      {s.lastEventCount} {plural(s.lastEventCount, 'бронь', 'брони', 'броней')}
+                    </span>
+                  )}
                 </p>
                 <p className="text-[11px] text-gray-400 truncate">
                   {s.lastSyncStatus === 'ОШИБКА' ? s.lastSyncError : fmtSyncTime(s.lastSyncAt)}
