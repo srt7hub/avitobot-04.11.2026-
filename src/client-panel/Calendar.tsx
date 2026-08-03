@@ -310,6 +310,8 @@ function SyncSettings({ property, onChanged }: { property: CalendarProperty; onC
   const [err, setErr] = useState('')
   const [feedUrl, setFeedUrl] = useState('')
   const [copied, setCopied] = useState(false)
+  // Для какой площадки ссылка: её собственные брони в фид не попадут.
+  const [feedFor, setFeedFor] = useState('ЯНДЕКС')
 
   async function handleAdd() {
     if (!url.trim()) {
@@ -345,7 +347,7 @@ function SyncSettings({ property, onChanged }: { property: CalendarProperty; onC
     setBusy(true)
     setErr('')
     try {
-      const res = await createCalendarFeed(property.propertyId)
+      const res = await createCalendarFeed(property.propertyId, false, feedFor)
       if (res) {
         const absolute = res.url.startsWith('http') ? res.url : `${window.location.origin}${res.url}`
         setFeedUrl(absolute)
@@ -366,8 +368,15 @@ function SyncSettings({ property, onChanged }: { property: CalendarProperty; onC
     <div className="border-t border-gray-100 px-4 py-3 space-y-3 bg-gray-50/50">
       {/* Наша ссылка — её вставляют в экстранет площадки */}
       <div>
-        <p className="text-xs font-medium text-gray-700 mb-1.5">Наш календарь для площадок</p>
+        <p className="text-xs font-medium text-gray-700 mb-1.5">Наш календарь для площадки</p>
         <div className="flex gap-2">
+          <select
+            value={feedFor}
+            onChange={e => { setFeedFor(e.target.value); setFeedUrl('') }}
+            className="shrink-0 px-2 py-1.5 text-xs bg-white border border-gray-200 rounded-lg text-gray-700"
+          >
+            {PLATFORMS.map(p => <option key={p} value={p}>{p}</option>)}
+          </select>
           <input
             readOnly
             value={feedUrl}
@@ -383,7 +392,8 @@ function SyncSettings({ property, onChanged }: { property: CalendarProperty; onC
           </button>
         </div>
         <p className="text-[11px] text-gray-400 mt-1">
-          Вставьте её в Яндекс Путешествия → Экстранет → Синхронизация календарей.
+          Вставьте её в экстранет выбранной площадки. Её собственные брони в эту
+          ссылку не попадут — только занятость с других площадок.
         </p>
         {/* Ссылку собирает сервер из APP_URL. Если он указывает на другой хост,
             площадка получит недоступный адрес — предупреждаем до похода в экстранет. */}

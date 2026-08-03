@@ -129,7 +129,9 @@ app.get('/api/calendar/feed/:token.ics', async (req, res) => {
     }
 
     // Площадке не отдаём её же брони: иначе она увидит их как чужую занятость.
-    const platform = typeof req.query.for === 'string' ? req.query.for.toUpperCase() : undefined
+    // Получатель зашит в саму ссылку (forPlatform), ?for= оставлен для отладки.
+    const override = typeof req.query.for === 'string' ? req.query.for.toUpperCase() : ''
+    const platform = override || feed.forPlatform || undefined
     const ics = await buildPropertyFeed(feed.propertyId, platform)
 
     res.setHeader('Content-Type', 'text/calendar; charset=utf-8')

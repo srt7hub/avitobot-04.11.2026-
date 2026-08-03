@@ -210,10 +210,20 @@ router.post('/calendar/sync', async (req, res) => {
 // Ссылка на наш экспортный .ics — её клиент вставляет в экстранет площадки.
 router.post('/calendar/feed', async (req, res) => {
   const tenantId = req.auth!.tenantId!
-  const { propertyId, rotate } = req.body as { propertyId?: string; rotate?: boolean }
+  const { propertyId, rotate, forPlatform } = req.body as {
+    propertyId?: string
+    rotate?: boolean
+    forPlatform?: string
+  }
 
   if (!propertyId) {
     res.status(400).json({ error: 'propertyId обязателен' })
+    return
+  }
+
+  const platform = (forPlatform ?? '').trim().toUpperCase()
+  if (platform && !PLATFORMS.includes(platform)) {
+    res.status(400).json({ error: `forPlatform должен быть одним из: ${PLATFORMS.join(', ')}` })
     return
   }
 
@@ -227,12 +237,16 @@ router.post('/calendar/feed', async (req, res) => {
     const token = generateFeedToken()
     const feed = await prisma.calendarFeed.upsert({
       where: { propertyId },
-      create: { tenantId, propertyId, token },
-      update: rotate ? { token } : {},
+      create: { tenantId, propertyId, token, forPlatform: platform },
+      update: { ...(rotate ? { token } : {}), ...(forPlatform !== undefined ? { forPlatform: platform } : {}) },
     })
 
     const base = process.env.APP_URL ?? ''
-    res.json({ token: feed.token, url: `${base}/api/calendar/feed/${feed.token}.ics` })
+    res.json({
+      token: feed.token,
+      forPlatform: feed.forPlatform,
+      url: `${base}/api/calendar/feed/${feed.token}.ics`,
+    })
   } catch (err) {
     console.error('[calendar/feed POST] error:', err)
     res.status(500).json({ error: 'Не удалось создать ссылку' })

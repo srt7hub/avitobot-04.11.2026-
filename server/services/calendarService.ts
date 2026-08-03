@@ -170,10 +170,21 @@ export async function syncTenantCalendars(tenantId: string): Promise<SyncOneResu
   return results
 }
 
+/** Ключ интервала по дням — для схлопывания одной и той же занятости из разных источников. */
+function intervalKey(start: Date, end: Date): string {
+  return `${start.toISOString().slice(0, 10)}_${end.toISOString().slice(0, 10)}`
+}
+
 /**
  * Собирает наш экспортный .ics для объекта: брони из Avito + блокировки прочих
  * площадок, КРОМЕ той, кому фид предназначен (excludePlatform) — иначе площадка
  * получит обратно собственные брони и это выглядит как чужая занятость.
+ *
+ * Ссылка на фид одна для всех площадок, поэтому excludePlatform обычно не задан.
+ * Тогда работает вторая защита — дедупликация по датам: если площадка уже знает
+ * эту занятость (интервал совпал с её же фидом), повторно мы её не отдаём.
+ * Это же убирает дубли, когда одна бронь приходит и через Avito API, и через
+ * iCal-фид Авито.
  */
 export async function buildPropertyFeed(propertyId: string, excludePlatform?: string): Promise<string> {
   const property = await prisma.property.findUnique({ where: { id: propertyId } })
@@ -195,9 +206,13 @@ export async function buildPropertyFeed(propertyId: string, excludePlatform?: st
   ])
 
   const events: IcalExportEvent[] = []
+  const seen = new Set<string>()
 
   for (const b of bookings) {
     if (!isBookingActive(b.status)) continue
+    const key = intervalKey(b.checkIn, b.checkOut)
+    if (seen.has(key)) continue
+    seen.add(key)
     events.push({
       uid: `booking-${b.id}@avitobot`,
       // Имя гостя намеренно не отдаём: фид публичный по токену, а iCal между
@@ -209,6 +224,9 @@ export async function buildPropertyFeed(propertyId: string, excludePlatform?: st
   }
 
   for (const blk of blocks) {
+    const key = intervalKey(blk.start, blk.end)
+    if (seen.has(key)) continue
+    seen.add(key)
     events.push({
       uid: `block-${blk.id}@avitobot`,
       summary: `Занято (${blk.sync.platform})`,

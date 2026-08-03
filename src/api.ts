@@ -488,9 +488,9 @@ export function syncCalendars() {
   })
 }
 
-export function createCalendarFeed(propertyId: string, rotate = false) {
-  return request<{ token: string; url: string }>('/client/calendar/feed', {
+export function createCalendarFeed(propertyId: string, rotate = false, forPlatform = '') {
+  return request<{ token: string; url: string; forPlatform: string }>('/client/calendar/feed', {
     method: 'POST',
-    body: JSON.stringify({ propertyId, rotate }),
+    body: JSON.stringify({ propertyId, rotate, forPlatform }),
   })
 }

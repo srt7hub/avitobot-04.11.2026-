@@ -239,6 +239,10 @@ model CalendarFeed {
   propertyId String   @unique
   token      String   @unique
 
+  // Площадка-получатель этой ссылки. Её собственные брони в фид не попадают,
+  // иначе она увидит их как чужую занятость. Пусто = отдаём всё.
+  forPlatform String  @default("")
+
   createdAt  DateTime @default(now())
 
   tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
