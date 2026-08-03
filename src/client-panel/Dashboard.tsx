@@ -6,10 +6,9 @@ import DialogueList from './components/DialogueList'
 
 interface Props {
   onNavigate: (page: string) => void
-  onLogout: () => void
 }
 
-export default function Dashboard({ onNavigate, onLogout }: Props) {
+export default function Dashboard({ onNavigate }: Props) {
   const [data, setData] = useState<DashboardData | null>(null)
   const [loading, setLoading] = useState(true)
   const [botLoading, setBotLoading] = useState(false)
@@ -65,15 +64,7 @@ export default function Dashboard({ onNavigate, onLogout }: Props) {
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <h2 className="text-lg font-semibold text-gray-900">Дашборд</h2>
-        <button
-          onClick={onLogout}
-          className="text-sm text-gray-400 hover:text-gray-600 transition-colors"
-        >
-          Выйти
-        </button>
-      </div>
+      <h2 className="text-lg font-semibold text-gray-900">Дашборд</h2>
 
       <BotStatus
         isRunning={data.bot.isRunning}
