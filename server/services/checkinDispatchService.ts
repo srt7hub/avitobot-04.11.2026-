@@ -9,7 +9,7 @@ const THIRTY_MINUTES_MS = 30 * 60 * 1000
 
 type ConfigWithTenant = PrismaTenantAvitoConfig & { tenant: Tenant }
 
-function checkinTimeParts(): { hour: number; minute: number } {
+function defaultCheckinTimeParts(): { hour: number; minute: number } {
   const value = process.env.CHECKIN_DEFAULT_TIME || '14:00'
   const match = /^(\d{1,2}):(\d{2})$/.exec(value)
   const hour = match ? Number(match[1]) : 14
@@ -21,18 +21,26 @@ function checkinTimeParts(): { hour: number; minute: number } {
  * Booking даты хранятся как UTC-полночь. Для Уфы/Екатеринбурга задаём время
  * заезда в UTC+5; при смене города достаточно поменять CHECKIN_UTC_OFFSET_HOURS.
  */
-export function checkinMoment(checkInDate: Date): Date {
-  const { hour, minute } = checkinTimeParts()
+function checkinTimeParts(checkInTimeMinutes?: number | null): { hour: number; minute: number } {
+  if (checkInTimeMinutes !== null && checkInTimeMinutes !== undefined && checkInTimeMinutes >= 0 && checkInTimeMinutes < 24 * 60) {
+    return { hour: Math.floor(checkInTimeMinutes / 60), minute: checkInTimeMinutes % 60 }
+  }
+  return defaultCheckinTimeParts()
+}
+
+export function checkinMoment(checkInDate: Date, checkInTimeMinutes?: number | null): Date {
+  const { hour, minute } = checkinTimeParts(checkInTimeMinutes)
   const offsetHours = Number(process.env.CHECKIN_UTC_OFFSET_HOURS || 5)
   return new Date(Date.UTC(
     checkInDate.getUTCFullYear(), checkInDate.getUTCMonth(), checkInDate.getUTCDate(), hour - offsetHours, minute,
   ))
 }
 
-function formatCheckin(checkInDate: Date): string {
-  const { hour, minute } = checkinTimeParts()
+function formatCheckin(checkInDate: Date, checkInTimeMinutes?: number | null, source = ''): string {
+  const { hour, minute } = checkinTimeParts(checkInTimeMinutes)
   const date = new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'long', timeZone: 'UTC' }).format(checkInDate)
-  return `${date}, ${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`
+  const origin = source === 'GUEST_CHAT' ? ' · время сообщил гость' : ' · время по умолчанию'
+  return `${date}, ${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}${origin}`
 }
 
 function renderInstruction(property: {
@@ -84,7 +92,7 @@ export async function requestDueCheckinApprovals(): Promise<void> {
   })
 
   for (const booking of candidates) {
-    const scheduledFor = new Date(checkinMoment(booking.checkIn).getTime() - FOUR_HOURS_MS)
+    const scheduledFor = new Date(checkinMoment(booking.checkIn, booking.checkInTimeMinutes).getTime() - FOUR_HOURS_MS)
     // Не создаём карточки для далёких и уже завершённых проживаний.
     if (now < scheduledFor || now > booking.checkOut) continue
 
@@ -98,6 +106,10 @@ export async function requestDueCheckinApprovals(): Promise<void> {
       data: { tenantId: booking.tenantId, bookingId: booking.id, scheduledFor },
     }).catch(async () => prisma.checkinDispatch.findUnique({ where: { bookingId: booking.id } }))
     if (!dispatch || dispatch.sentAt || dispatch.cancelledAt) continue
+    if (dispatch.scheduledFor.getTime() !== scheduledFor.getTime()) {
+      await prisma.checkinDispatch.update({ where: { id: dispatch.id }, data: { scheduledFor } })
+      dispatch.scheduledFor = scheduledFor
+    }
     if (dispatch.approvalRequestedAt) continue
     if (dispatch.deferredUntil && dispatch.deferredUntil > now) continue
 
@@ -113,18 +125,25 @@ export async function requestDueCheckinApprovals(): Promise<void> {
     })
     if (locked.count !== 1) continue
 
-    await sendCheckinApprovalRequest(
-      booking.tenant.telegramBotToken,
-      booking.tenant.telegramChatId,
-      dispatch.id,
-      {
-        guestName: booking.guestName,
-        propertyName: booking.property.name,
-        address: booking.property.address,
-        checkInLabel: formatCheckin(booking.checkIn),
-        instruction,
-      },
-    )
+    try {
+      await sendCheckinApprovalRequest(
+        booking.tenant.telegramBotToken,
+        booking.tenant.telegramChatId,
+        dispatch.id,
+        {
+          guestName: booking.guestName,
+          propertyName: booking.property.name,
+          address: booking.property.address,
+          checkInLabel: formatCheckin(booking.checkIn, booking.checkInTimeMinutes, booking.checkInTimeSource),
+          instruction,
+        },
+      )
+    } catch (err) {
+      // Telegram мог быть временно недоступен: снимаем блокировку, чтобы
+      // следующий цикл поллинга повторил создание карточки.
+      await prisma.checkinDispatch.update({ where: { id: dispatch.id }, data: { approvalRequestedAt: null } }).catch(() => {})
+      throw err
+    }
   }
 }
 
@@ -144,6 +163,7 @@ export async function handleCheckinAction(
   if (!dispatch || dispatch.tenantId !== config.tenantId) return 'Заселение не найдено'
   if (dispatch.sentAt) return 'Инструкция уже отправлена'
   if (dispatch.cancelledAt) return 'Отправка отменена'
+  if (new Date() < dispatch.scheduledFor) return 'Время заезда изменилось — карточка придёт ближе к заселению'
 
   if (action === 'cic') {
     await prisma.checkinDispatch.update({ where: { id: dispatch.id }, data: { cancelledAt: new Date() } })
@@ -158,7 +178,7 @@ export async function handleCheckinAction(
   }
 
   const booking = dispatch.booking
-  if (!booking.accessUnlocked || !booking.avitoChatId) return 'Бронь не оплачена или чат Авито не привязан'
+  if (!booking.accessUnlocked || !booking.avitoChatId || new Date() > booking.checkOut) return 'Бронь не оплачена, завершена или чат Авито не привязан'
   const instruction = renderInstruction(booking.property)
   if (!isReadyForSend(instruction)) return 'У квартиры не заполнена инструкция заселения'
 

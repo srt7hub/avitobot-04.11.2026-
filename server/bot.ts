@@ -21,6 +21,7 @@ import { isAiSilentPhase } from './utils/guestPhase.js'
 import { sendHumanTakeoverAlert, sendDialogueNotification, sendUnknownAnswerAlert, sendOpsAlert, sendPausedMessageNotification } from './services/telegramService.js'
 import { pollTelegramCommands } from './services/telegramCommandService.js'
 import { requestDueCheckinApprovals } from './services/checkinDispatchService.js'
+import { recordGuestCheckinTime } from './services/checkinTimeService.js'
 import { maskPii } from './services/piiService.js'
 import { isPaymentStatusIntent, isSmsIntent, isAckIntent } from './constants/intents.js'
 import type { AvitoChat, AvitoMessage } from './services/avitoService.js'
@@ -227,6 +228,13 @@ async function processMessage(
     lastMessageAt: new Date(),
     guestName: chat.users?.find(u => u.id !== Number(config.avitoUserId))?.name ?? '',
   })
+
+  // Время заселения сохраняем даже в пачке сообщений и при ручной паузе: это
+  // служебные данные брони, а не ответ гостю. Неясные фразы сервис игнорирует.
+  const checkinTime = await recordGuestCheckinTime(tenantId, avitoChatId, msgText)
+  if (checkinTime) {
+    console.log(`[bot][${tenantId}] Время заезда ${checkinTime.label} сохранено для чата ${avitoChatId}`)
+  }
 
   const avitoConfig: TenantAvitoConfig = {
     id: config.id,

@@ -139,6 +139,11 @@ model Booking {
   guestName      String   @default("")
   checkIn        DateTime
   checkOut       DateTime
+  // Время заезда в минутах после полуночи. Пусто — используем CHECKIN_DEFAULT_TIME.
+  // Заполняется только из однозначной фразы гостя о заселении в чате Авито.
+  checkInTimeMinutes Int?
+  checkInTimeSource  String @default("")
+  checkInTimeMessage String @default("")
 
   totalPrice     Float    @default(0)
   prepaidAmount  Float    @default(0)    // предоплата (safe_deposit) — >0 значит оплачено
