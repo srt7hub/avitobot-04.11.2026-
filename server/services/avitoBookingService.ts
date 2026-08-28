@@ -200,6 +200,8 @@ export async function syncBookingsForTenant(config: TenantAvitoConfig): Promise<
                 data: {
                   // имя/даты не перетираем «гостём по умолчанию» и пустыми
                   guestName: parsed.guestName !== 'Авито гость' ? parsed.guestName : existing.guestName,
+                  checkIn: toMidnightUTC(parsed.checkIn),
+                  checkOut: toMidnightUTC(parsed.checkOut),
                   totalPrice: parsed.totalPrice,
                   prepaidAmount: parsed.prepaidAmount,
                   accessUnlocked: isPaidNow || existing.accessUnlocked,

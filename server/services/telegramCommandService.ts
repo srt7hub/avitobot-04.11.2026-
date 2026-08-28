@@ -6,8 +6,12 @@ import {
   replaceKeyboardWithStatus,
   CB_BOT_ON,
   CB_BOT_OFF,
+  CB_CHECKIN_SEND,
+  CB_CHECKIN_DELAY,
+  CB_CHECKIN_CANCEL,
   type TelegramUpdate,
 } from './telegramService.js'
+import { handleCheckinAction, type CheckinAction } from './checkinDispatchService.js'
 import type { Tenant, TenantAvitoConfig } from '@prisma/client'
 
 // Входящий канал Telegram: приём нажатий inline-кнопок под уведомлениями.
@@ -32,15 +36,15 @@ export function isAuthorizedChat(update: TelegramUpdate, tenantChatId: string): 
  */
 export function parseCallbackData(
   data: string | undefined
-): { action: typeof CB_BOT_ON | typeof CB_BOT_OFF; dialogueId: string } | null {
+): { action: typeof CB_BOT_ON | typeof CB_BOT_OFF | CheckinAction; targetId: string } | null {
   if (!data) return null
   const sep = data.indexOf(':')
   if (sep === -1) return null
   const action = data.slice(0, sep)
-  const dialogueId = data.slice(sep + 1).trim()
-  if (action !== CB_BOT_ON && action !== CB_BOT_OFF) return null
-  if (!dialogueId) return null
-  return { action, dialogueId }
+  const targetId = data.slice(sep + 1).trim()
+  if (action !== CB_BOT_ON && action !== CB_BOT_OFF && action !== CB_CHECKIN_SEND && action !== CB_CHECKIN_DELAY && action !== CB_CHECKIN_CANCEL) return null
+  if (!targetId) return null
+  return { action, targetId }
 }
 
 export function actorName(update: TelegramUpdate): string {
@@ -73,7 +77,25 @@ async function handleCallback(
     await answerCallbackQuery(botToken, cb.id)
     return
   }
-  const { action, dialogueId } = parsed
+  const { action, targetId } = parsed
+
+  const who = actorName(update)
+  if (action === CB_CHECKIN_SEND || action === CB_CHECKIN_DELAY || action === CB_CHECKIN_CANCEL) {
+    try {
+      const status = await handleCheckinAction(config, targetId, action, who)
+      await answerCallbackQuery(botToken, cb.id, status)
+      const messageId = cb.message?.message_id
+      if (messageId !== undefined && tenant.telegramChatId) {
+        await replaceKeyboardWithStatus(botToken, tenant.telegramChatId, messageId, status)
+      }
+    } catch (err) {
+      console.error(`[tgCmd][${tenantId}] Check-in callback error:`, err)
+      await answerCallbackQuery(botToken, cb.id, 'Не удалось отправить — попробуйте ещё раз')
+    }
+    return
+  }
+
+  const dialogueId = targetId
 
   // Диалог обязан принадлежать этому тенанту: callback_data приходит извне и
   // может быть подделана, иначе тенант дотянулся бы до чужого диалога.
@@ -86,7 +108,6 @@ async function handleCallback(
     return
   }
 
-  const who = actorName(update)
   let status: string
 
   if (action === CB_BOT_ON) {

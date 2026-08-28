@@ -20,6 +20,7 @@ import { syncTenantCalendars } from './services/calendarService.js'
 import { isAiSilentPhase } from './utils/guestPhase.js'
 import { sendHumanTakeoverAlert, sendDialogueNotification, sendUnknownAnswerAlert, sendOpsAlert, sendPausedMessageNotification } from './services/telegramService.js'
 import { pollTelegramCommands } from './services/telegramCommandService.js'
+import { requestDueCheckinApprovals } from './services/checkinDispatchService.js'
 import { maskPii } from './services/piiService.js'
 import { isPaymentStatusIntent, isSmsIntent, isAckIntent } from './constants/intents.js'
 import type { AvitoChat, AvitoMessage } from './services/avitoService.js'
@@ -649,6 +650,9 @@ async function runBookingSync(): Promise<void> {
             console.error(`[bookingSync][${config.tenantId}] sendPaymentConfirmation failed:`, err),
           )
         }
+        await requestDueCheckinApprovals().catch(err =>
+          console.error(`[checkinDispatch][${config.tenantId}] scheduler failed:`, err),
+        )
       } catch (err) {
         console.error(`[bookingSync][${config.tenantId}] sync error:`, err)
       }

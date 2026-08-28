@@ -128,6 +128,12 @@ export interface Property {
   description: string
   avitoItemId: string | null
   isActive: boolean
+  intercomCode: string
+  mapUrl: string
+  doorCode: string
+  wifiName: string
+  wifiPassword: string
+  checkInInstructions: string
 }
 
 export function fetchProperties() {
@@ -143,7 +149,11 @@ export function createProperty(payload: { name: string; address: string; descrip
 
 export function updateProperty(
   id: string,
-  payload: { name?: string; address?: string; description?: string; isActive?: boolean }
+  payload: {
+    name?: string; address?: string; description?: string; isActive?: boolean
+    intercomCode?: string; mapUrl?: string; doorCode?: string; wifiName?: string
+    wifiPassword?: string; checkInInstructions?: string
+  }
 ) {
   return request<Property>(`/client/properties/${id}`, {
     method: 'PUT',

@@ -53,14 +53,14 @@ test('пустой telegramChatId тенанта не авторизует ни�
 test('разбирает включение бота', () => {
   assert.deepEqual(parseCallbackData(`${CB_BOT_ON}:abc123`), {
     action: CB_BOT_ON,
-    dialogueId: 'abc123',
+    targetId: 'abc123',
   })
 })
 
 test('разбирает выключение бота', () => {
   assert.deepEqual(parseCallbackData(`${CB_BOT_OFF}:abc123`), {
     action: CB_BOT_OFF,
-    dialogueId: 'abc123',
+    targetId: 'abc123',
   })
 })
 

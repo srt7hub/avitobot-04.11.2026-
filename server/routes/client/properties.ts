@@ -91,10 +91,16 @@ router.get('/properties', async (req, res) => {
 
 router.post('/properties', async (req, res) => {
   const tenantId = req.auth!.tenantId!
-  const { name, address, description } = req.body as {
+  const { name, address, description, intercomCode, mapUrl, doorCode, wifiName, wifiPassword, checkInInstructions } = req.body as {
     name?: string
     address?: string
     description?: string
+    intercomCode?: string
+    mapUrl?: string
+    doorCode?: string
+    wifiName?: string
+    wifiPassword?: string
+    checkInInstructions?: string
   }
 
   if (!name?.trim()) {
@@ -110,6 +116,12 @@ router.post('/properties', async (req, res) => {
         name: name.trim(),
         address: address?.trim() ?? '',
         description: description?.trim() ?? '',
+        intercomCode: intercomCode?.trim() ?? '',
+        mapUrl: mapUrl?.trim() ?? '',
+        doorCode: doorCode?.trim() ?? '',
+        wifiName: wifiName?.trim() ?? '',
+        wifiPassword: wifiPassword?.trim() ?? '',
+        checkInInstructions: checkInInstructions?.trim() ?? '',
         isActive: false,
       },
     })
@@ -128,11 +140,17 @@ router.post('/properties', async (req, res) => {
 router.put('/properties/:id', async (req, res) => {
   const tenantId = req.auth!.tenantId!
   const { id } = req.params
-  const { name, address, description, isActive } = req.body as {
+  const { name, address, description, isActive, intercomCode, mapUrl, doorCode, wifiName, wifiPassword, checkInInstructions } = req.body as {
     name?: string
     address?: string
     description?: string
     isActive?: boolean
+    intercomCode?: string
+    mapUrl?: string
+    doorCode?: string
+    wifiName?: string
+    wifiPassword?: string
+    checkInInstructions?: string
   }
 
   const property = await prisma.property.findFirst({ where: { id, tenantId } })
@@ -148,6 +166,12 @@ router.put('/properties/:id', async (req, res) => {
         ...(name !== undefined && { name: name.trim() }),
         ...(address !== undefined && { address: address.trim() }),
         ...(description !== undefined && { description: description.trim() }),
+        ...(intercomCode !== undefined && { intercomCode: intercomCode.trim() }),
+        ...(mapUrl !== undefined && { mapUrl: mapUrl.trim() }),
+        ...(doorCode !== undefined && { doorCode: doorCode.trim() }),
+        ...(wifiName !== undefined && { wifiName: wifiName.trim() }),
+        ...(wifiPassword !== undefined && { wifiPassword: wifiPassword.trim() }),
+        ...(checkInInstructions !== undefined && { checkInInstructions: checkInInstructions.trim() }),
         ...(isActive !== undefined && { isActive }),
         // avitoItemId не редактируется клиентом — только OPS
       },

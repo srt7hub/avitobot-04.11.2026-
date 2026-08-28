@@ -103,6 +103,8 @@ model Property {
   // Чувствительные данные — отдаются гостю только в разрешённой фазе
   // (оплатил + заехал), см. isSensitiveDataAllowed / guestPhase.
   doorCode             String @default("")
+  intercomCode         String @default("")
+  mapUrl               String @default("")
   wifiName             String @default("")
   wifiPassword         String @default("")
   checkInInstructions  String @default("")
@@ -157,10 +159,32 @@ model Booking {
 
   tenant         Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
   property       Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  checkinDispatch CheckinDispatch?
 
   @@unique([tenantId, avitoBookingId])
   @@index([tenantId, avitoChatId])
   @@index([propertyId])
+}
+
+// ─── CheckinDispatch ─────────────────────────────────────────────────────────
+// Одна запись на бронь: планирование, подтверждение менеджером и аудит отправки
+// инструкции. Не допускает дублей при рестарте бота или повторном cron-цикле.
+model CheckinDispatch {
+  id                  String    @id @default(cuid())
+  tenantId            String
+  bookingId           String    @unique
+  scheduledFor        DateTime
+  approvalRequestedAt DateTime?
+  deferredUntil       DateTime?
+  sentAt              DateTime?
+  sentBy              String    @default("")
+  cancelledAt         DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  booking Booking @relation(fields: [bookingId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId, scheduledFor])
 }
 
 // ─── CalendarSync ─────────────────────────────────────────────────────────────

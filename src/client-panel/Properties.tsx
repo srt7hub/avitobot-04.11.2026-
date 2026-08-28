@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { fetchAvitoItems, AvitoItem } from '../api'
+import { fetchAvitoItems, fetchProperties, updateProperty, AvitoItem, Property } from '../api'
 
 function statusLabel(status: string) {
   const map: Record<string, { label: string; color: string }> = {
@@ -80,15 +80,48 @@ function AvitoItemCard({ item }: { item: AvitoItem }) {
 
 export default function Properties() {
   const [items, setItems] = useState<AvitoItem[]>([])
+  const [properties, setProperties] = useState<Property[]>([])
+  const [selectedPropertyId, setSelectedPropertyId] = useState('')
+  const [checkinForm, setCheckinForm] = useState({ intercomCode: '', mapUrl: '', doorCode: '', wifiName: '', wifiPassword: '', checkInInstructions: '' })
+  const [savingCheckin, setSavingCheckin] = useState(false)
+  const [checkinSaved, setCheckinSaved] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
   useEffect(() => {
-    fetchAvitoItems()
-      .then(result => { if (result) setItems(result.items) })
+    Promise.all([fetchAvitoItems(), fetchProperties()])
+      .then(([itemsResult, propertiesResult]) => {
+        if (itemsResult) setItems(itemsResult.items)
+        if (propertiesResult) {
+          setProperties(propertiesResult)
+          if (propertiesResult[0]) selectProperty(propertiesResult[0])
+        }
+      })
       .catch(err => setError(err instanceof Error ? err.message : 'Не удалось загрузить объявления'))
       .finally(() => setLoading(false))
   }, [])
+
+  function selectProperty(property: Property) {
+    setSelectedPropertyId(property.id)
+    setCheckinForm({
+      intercomCode: property.intercomCode ?? '', mapUrl: property.mapUrl ?? '', doorCode: property.doorCode ?? '',
+      wifiName: property.wifiName ?? '', wifiPassword: property.wifiPassword ?? '', checkInInstructions: property.checkInInstructions ?? '',
+    })
+    setCheckinSaved(false)
+  }
+
+  async function saveCheckin() {
+    if (!selectedPropertyId) return
+    setSavingCheckin(true)
+    setCheckinSaved(false)
+    try {
+      const updated = await updateProperty(selectedPropertyId, checkinForm)
+      if (updated) setProperties(items => items.map(item => item.id === updated.id ? updated : item))
+      setCheckinSaved(true)
+    } finally {
+      setSavingCheckin(false)
+    }
+  }
 
   return (
     <div className="space-y-4">
@@ -119,6 +152,35 @@ export default function Properties() {
             {items.map(item => <AvitoItemCard key={item.id} item={item} />)}
           </div>
         </>
+      )}
+
+      {!loading && properties.length > 0 && (
+        <section className="bg-white rounded-xl border border-gray-100 shadow-sm p-5 space-y-4">
+          <div>
+            <h3 className="text-base font-semibold text-gray-900">Инструкция по заселению</h3>
+            <p className="text-xs text-gray-500 mt-1">За 4 часа до оплаченного заезда бот покажет в Telegram полный текст для гостя и запросит подтверждение отправки.</p>
+          </div>
+          {properties.length > 1 && (
+            <select value={selectedPropertyId} onChange={e => {
+              const property = properties.find(item => item.id === e.target.value)
+              if (property) selectProperty(property)
+            }} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm">
+              {properties.map(property => <option key={property.id} value={property.id}>{property.name}</option>)}
+            </select>
+          )}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <input value={checkinForm.intercomCode} onChange={e => setCheckinForm(f => ({ ...f, intercomCode: e.target.value }))} placeholder="Код домофона" className="border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+            <input value={checkinForm.doorCode} onChange={e => setCheckinForm(f => ({ ...f, doorCode: e.target.value }))} placeholder="Код доступа в квартиру" className="border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+            <input value={checkinForm.wifiName} onChange={e => setCheckinForm(f => ({ ...f, wifiName: e.target.value }))} placeholder="Название Wi-Fi" className="border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+            <input value={checkinForm.wifiPassword} onChange={e => setCheckinForm(f => ({ ...f, wifiPassword: e.target.value }))} placeholder="Пароль Wi-Fi" className="border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+          </div>
+          <input value={checkinForm.mapUrl} onChange={e => setCheckinForm(f => ({ ...f, mapUrl: e.target.value }))} placeholder="Ссылка на 2ГИС или Яндекс Карты" className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm" />
+          <textarea value={checkinForm.checkInInstructions} onChange={e => setCheckinForm(f => ({ ...f, checkInInstructions: e.target.value }))} rows={4} placeholder={'Необязательный свой шаблон. Плейсхолдеры: {{address}}, {{intercomCode}}, {{doorCode}}, {{mapUrl}}, {{wifiName}}, {{wifiPassword}}'} className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm resize-y" />
+          <div className="flex items-center gap-3">
+            <button onClick={saveCheckin} disabled={savingCheckin} className="bg-gray-900 text-white rounded-lg px-4 py-2 text-sm font-medium disabled:opacity-50">{savingCheckin ? 'Сохранение...' : 'Сохранить инструкцию'}</button>
+            {checkinSaved && <span className="text-sm text-emerald-600">Сохранено</span>}
+          </div>
+        </section>
       )}
     </div>
   )

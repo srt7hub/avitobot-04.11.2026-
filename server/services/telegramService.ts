@@ -5,6 +5,9 @@ const TG_API = process.env.TELEGRAM_API_BASE || 'https://api.telegram.org'
 // а не avitoChatId. Формат: "<action>:<dialogueId>".
 export const CB_BOT_OFF = 'boff'
 export const CB_BOT_ON = 'bon'
+export const CB_CHECKIN_SEND = 'cis'
+export const CB_CHECKIN_DELAY = 'cid'
+export const CB_CHECKIN_CANCEL = 'cic'
 
 type InlineButton = { text: string; callback_data?: string; url?: string }
 type InlineKeyboard = { inline_keyboard: InlineButton[][] }
@@ -42,7 +45,7 @@ async function postMessage(
   chatId: string,
   text: string,
   replyMarkup?: InlineKeyboard
-): Promise<void> {
+): Promise<number | null> {
   try {
     const res = await fetch(`${TG_API}/bot${botToken}/sendMessage`, {
       method: 'POST',
@@ -59,9 +62,12 @@ async function postMessage(
       const body = await res.text()
       console.error('[telegramService] sendMessage failed:', res.status, body)
     }
+    const data = await res.json() as { ok: boolean; result?: { message_id?: number } }
+    return data.ok ? (data.result?.message_id ?? null) : null
   } catch (err) {
     console.error('[telegramService] sendMessage error:', err)
   }
+  return null
 }
 
 // Убирает спиннер на кнопке у нажавшего. Без этого Telegram крутит его ~30 сек.
@@ -248,4 +254,40 @@ export async function sendOpsAlert(message: string): Promise<void> {
   if (!botToken || !chatId) return
 
   await postMessage(botToken, chatId, `[OPS ALERT] ${message}`)
+}
+
+/** Карточка для менеджера. Секреты намеренно не дублируются в Telegram-группе. */
+export async function sendCheckinApprovalRequest(
+  botToken: string,
+  chatId: string,
+  dispatchId: string,
+  booking: { guestName: string; propertyName: string; address: string; checkInLabel: string; instruction: string },
+): Promise<void> {
+  if (!botToken || !chatId) return
+
+  const text = [
+    '<b>ЗАСЕЛЕНИЕ ГОТОВО К ОТПРАВКЕ</b>',
+    '',
+    `Гость: <b>${booking.guestName || 'Авито гость'}</b>`,
+    `Квартира: <b>${booking.propertyName}</b>`,
+    booking.address ? `Адрес: ${booking.address}` : '',
+    `Заезд: ${booking.checkInLabel}`,
+    '',
+    '<b>Текст, который уйдёт гостю:</b>',
+    `<pre>${escapeHtml(booking.instruction)}</pre>`,
+  ].filter(Boolean).join('\n')
+
+  const keyboard: InlineKeyboard = {
+    inline_keyboard: [[
+      { text: 'Отправить инструкцию', callback_data: `${CB_CHECKIN_SEND}:${dispatchId}` },
+      { text: 'Отложить 30 мин', callback_data: `${CB_CHECKIN_DELAY}:${dispatchId}` },
+    ], [
+      { text: 'Не отправлять', callback_data: `${CB_CHECKIN_CANCEL}:${dispatchId}` },
+    ]],
+  }
+  await postMessage(botToken, chatId, text, keyboard)
+}
+
+function escapeHtml(value: string): string {
+  return value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
