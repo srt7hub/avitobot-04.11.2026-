@@ -79,7 +79,7 @@ router.get('/properties', async (req, res) => {
 
   try {
     const properties = await prisma.property.findMany({
-      where: { tenantId },
+      where: { tenantId, isActive: true },
       orderBy: { createdAt: 'asc' },
     })
     res.json(properties)

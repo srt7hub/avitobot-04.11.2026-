@@ -34,7 +34,7 @@ router.get('/calendar', async (req, res) => {
 
   try {
     const properties = await prisma.property.findMany({
-      where: { tenantId },
+      where: { tenantId, isActive: true },
       orderBy: { createdAt: 'asc' },
       include: {
         calendarSyncs: true,

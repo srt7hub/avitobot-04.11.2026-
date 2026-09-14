@@ -137,7 +137,7 @@ export async function syncBookingsForTenant(config: TenantAvitoConfig): Promise<
   const userId = process.env.AVITO_USER_ID!
 
   const properties = await prisma.property.findMany({
-    where: { tenantId, avitoItemId: { not: '' } },
+    where: { tenantId, avitoItemId: { not: '' }, isActive: true },
   })
 
   const now = new Date()
