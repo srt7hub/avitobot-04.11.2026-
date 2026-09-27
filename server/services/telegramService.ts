@@ -1,4 +1,6 @@
-const TG_API = process.env.TELEGRAM_API_BASE || 'https://api.telegram.org'
+import prisma from '../prisma.js'
+
+const TG_API =process.env.TELEGRAM_API_BASE || 'https://api.telegram.org'
 
 // ─── Inline-кнопки управления ботом ──────────────────────────────────────────
 // callback_data ограничена 64 байтами, поэтому шлём dialogue.id (cuid, ~25 симв.),
@@ -40,11 +42,28 @@ function botControlKeyboard(
   return { inline_keyboard: [row] }
 }
 
+type SendMessageResponse = {
+  ok: boolean
+  result?: { message_id?: number }
+  parameters?: { migrate_to_chat_id?: number }
+}
+
+// Группа стала супергруппой (клиент поменял настройки чата) — у неё новый chat_id.
+// Переписываем его у всех тенантов с этой парой токен+чат, иначе уведомления молча пропадают.
+async function migrateChatId(botToken: string, oldChatId: string, newChatId: string): Promise<void> {
+  const { count } = await prisma.tenant.updateMany({
+    where: { telegramBotToken: botToken, telegramChatId: oldChatId },
+    data: { telegramChatId: newChatId },
+  })
+  console.warn(`[telegramService] chat ${oldChatId} migrated to supergroup ${newChatId}, tenants updated: ${count}`)
+}
+
 async function postMessage(
   botToken: string,
   chatId: string,
   text: string,
-  replyMarkup?: InlineKeyboard
+  replyMarkup?: InlineKeyboard,
+  isRetry = false
 ): Promise<number | null> {
   try {
     const res = await fetch(`${TG_API}/bot${botToken}/sendMessage`, {
@@ -58,12 +77,16 @@ async function postMessage(
       }),
       signal: AbortSignal.timeout(10_000),
     })
-    if (!res.ok) {
-      const body = await res.text()
-      console.error('[telegramService] sendMessage failed:', res.status, body)
+    const body = await res.text()
+    const data = JSON.parse(body) as SendMessageResponse
+    if (data.ok) return data.result?.message_id ?? null
+
+    console.error('[telegramService] sendMessage failed:', res.status, body)
+    const migrateTo = data.parameters?.migrate_to_chat_id
+    if (migrateTo && !isRetry) {
+      await migrateChatId(botToken, chatId, String(migrateTo))
+      return postMessage(botToken, String(migrateTo), text, replyMarkup, true)
     }
-    const data = await res.json() as { ok: boolean; result?: { message_id?: number } }
-    return data.ok ? (data.result?.message_id ?? null) : null
   } catch (err) {
     console.error('[telegramService] sendMessage error:', err)
   }
